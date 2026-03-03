@@ -1,73 +1,194 @@
+# Guía de Despliegue Backend Django + Channels en CloudPanel (VPS)
 
-Paso 1
-Instalar en servidor root
-sudo apt update
-sudo apt install redis-server -y
-sudo systemctl enable redis-server
-sudo systemctl start redis-server
+Esta guía detalla paso a paso cómo desplegar una aplicación Django con soporte para WebSockets (Channels/Daphne) en un VPS gestionado con CloudPanel.
 
-Validar
-redis-cli ping
+## Paso 1: Preparación del Servidor (Usuario Root)
 
-Resultado PONG Ok
+Conéctate vía SSH como `root`.
 
-Paso 2
-Crear el Sitio en CloudPanel
+1. **Instalar Redis (Requerido para WebSockets):**
+   ```bash
+   sudo apt update
+   sudo apt install redis-server -y
+   sudo systemctl enable redis-server
+   sudo systemctl start redis-server
+   
+   # Validar instalación (Debe responder PONG)
+   redis-cli ping
+   ```
 
+2. **Instalar Dependencias del Sistema para Python y MySQL:**
+   Es crucial instalar estas librerías para evitar errores al compilar `mysqlclient` y crear entornos virtuales.
+   *(Ajusta `python3.12` a tu versión de Python si es diferente)*.
+   ```bash
+   sudo apt install -y python3.12-venv python3.12-dev default-libmysqlclient-dev build-essential pkg-config
+   ```
 
-Paso 3: Subir tu Código
-Subir arcivo o clonar
+## Paso 2: Crear el Sitio en CloudPanel
 
+1. Entra a CloudPanel -> **Sites** -> **Add Site**.
+2. Selecciona **Create a Python Site**.
+3. **Domain Name:** `api.tudominio.com` (o el que uses).
+4. **Python Version:** Python 3.12 (o superior).
+5. **App Port:** Anota el puerto que te asigna (ej. `8091`).
 
-Paso 4: Configurar Entorno en CloudPanel
-# Base de Datos (Usa los datos que CloudPanel te dio al crear la DB)
-DB_NAME=nombre_de_tu_db
-DB_USER=usuario_de_tu_db
-DB_PASSWORD=password_de_tu_db
-DB_HOST=127.0.0.1
-DB_PORT=3306
+## Paso 3: Configurar Código y Entorno (Usuario del Sitio)
 
-# Seguridad
-SECRET_KEY=inventa_una_clave_larga_y_segura_aqui
-DEBUG=False
-ALLOWED_HOSTS=api.tudominio.com # Reemplaza con tu dominio real
+Conéctate vía SSH con el usuario del sitio creado (ej. `uat-cloudnode` o el que hayas puesto).
 
-# Redis (Importante para WebSockets)
-CHANNEL_LAYER_REDIS=True
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
+1. **Clonar repositorio o subir archivos:**
+   Borra la carpeta vacía y clona tu repo (o usa la función Git de CloudPanel).
+   *(Asegúrate de estar en `htdocs/api.tudominio.com`)*.
 
-# CORS (Importante para que tu frontend en Vercel se conecte)
-CORS_ALLOWED_ORIGINS=https://tu-frontend-en-vercel.app
+2. **Crear e Instalar Entorno Virtual:**
+   ```bash
+   cd htdocs/api.tudominio.com
+   
+   # Crear entorno virtual
+   python3.12 -m venv venv
+   
+   # Activar
+   source venv/bin/activate
+   
+   # Instalar dependencias
+   pip install -r requirements.txt
+   
+   # Instalar servidores de producción (si no están en requirements.txt)
+   pip install gunicorn uvicorn daphne mysqlclient
+   ```
 
-Paso 5: Instalar Dependencias
-Instalar en root
-apt update
-apt install python3.12-venv -y
+3. **Configurar Variables de Entorno (`.env`):**
+   Crea un archivo `.env` en la raíz del proyecto:
+   ```env
+   # Base de Datos (Datos de CloudPanel -> Databases)
+   DB_NAME=cloudnode_db
+   DB_USER=cloudnode_user
+   DB_PASSWORD=tu_password
+   DB_HOST=127.0.0.1
+   DB_PORT=3306
 
-Instlar python dev
-apt update
-apt install python3.12-dev -y
+   # Django
+   SECRET_KEY=tu_clave_secreta_super_larga
+   DEBUG=False
+   ALLOWED_HOSTS=api.tudominio.com
 
-previo validacion: python3 --version
+   # Redis para Channels (WebSockets)
+   CHANNEL_LAYER_REDIS=True
+   REDIS_HOST=127.0.0.1
+   REDIS_PORT=6379
 
-En usario de web
-python3 -m venv venv
-source venv/bin/activate
+   # CORS (Dominios permitidos del Frontend)
+   CORS_ALLOWED_ORIGINS=https://tu-frontend.vercel.app
+   ```
 
-Crear entorno virtual
-python3 -m venv venv
-source venv/bin/activate
+4. **Configurar Gunicorn + Uvicorn:**
+   Crea un archivo `gunicorn_config.py` en la raíz del proyecto para forzar el uso de Uvicorn (WebSockets) y escuchar en el puerto correcto.
+   
+   ```python
+   import multiprocessing
 
-Como root instalar
-apt install default-libmysqlclient-dev pkg-config -y
+   # Reemplaza 8091 con el puerto que CloudPanel asignó en la pestaña Settings
+   bind = "127.0.0.1:8091"
+   
+   # CRUCIAL: Usar UvicornWorker para WebSockets
+   worker_class = "uvicorn.workers.UvicornWorker"
+   
+   workers = multiprocessing.cpu_count() * 2 + 1
+   
+   # Logs a stdout/stderr para que CloudPanel los capture
+   accesslog = "-"
+   errorlog = "-"
+   loglevel = "info"
+   ```
 
-Instalar librerías:
-pip install -r requirements.txt
-pip install gunicorn daphne mysqlclient
+## Paso 4: Base de Datos y Estáticos
 
-Migrar base de datos:
-/home/uat-cloudnode/htdocs/cloudnode.abitech.dev/venv/bin/python3 manage.py migrate
+Ejecuta las tareas de Django usando la ruta absoluta al Python del entorno virtual para evitar errores.
 
-Recolectar estáticos:
-/home/uat-cloudnode/htdocs/cloudnode.abitech.dev/venv/bin/python3 manage.py collectstatic --noinput
+```bash
+# 1. Migraciones
+./venv/bin/python manage.py migrate
+
+# 2. Recolectar archivos estáticos (CSS/JS admin)
+./venv/bin/python manage.py collectstatic --noinput
+
+# 3. Crear superusuario (Opcional)
+./venv/bin/python manage.py createsuperuser
+```
+
+## Paso 5: Ejecución del Servidor
+
+En CloudPanel, los sitios Python básicos no siempre permiten cambiar el comando de inicio en la interfaz.
+
+### Opción A: Ejecución Manual (Prueba Rápida/Temporal)
+```bash
+# Ejecutar en segundo plano
+nohup ./venv/bin/gunicorn -c gunicorn_config.py config.asgi:application &
+```
+
+### Opción B: Servicio Systemd (Recomendado/Permanente)
+Como usuario `root`, crea un servicio: `/etc/systemd/system/misitio.service`
+
+```ini
+[Unit]
+Description=Gunicorn instance to serve cloudnode
+After=network.target
+
+[Service]
+User=nombre_usuario_sitio
+Group=nombre_usuario_sitio
+WorkingDirectory=/home/nombre_usuario_sitio/htdocs/api.tudominio.com
+Environment="PATH=/home/nombre_usuario_sitio/htdocs/api.tudominio.com/venv/bin"
+ExecStart=/home/nombre_usuario_sitio/htdocs/api.tudominio.com/venv/bin/gunicorn -c gunicorn_config.py config.asgi:application
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Luego activar:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start misitio
+sudo systemctl enable misitio
+```
+
+## Paso 6: Configurar Nginx (Reverse Proxy)
+
+En CloudPanel -> Pestaña **Vhost**, reemplaza el bloque `location /` por esto para soportar WebSockets y servir estáticos correctamente:
+
+```nginx
+  # 1. Servir Estáticos del Admin
+  location /static/ {
+    alias /home/usuario_sitio/htdocs/api.tudominio.com/staticfiles/;
+    expires max;
+    access_log off;
+    add_header Cache-Control "public, max-age=31536000, immutable";
+  }
+
+  # 2. Proxy a la App (HTTP + WebSockets)
+  location / {
+    # Puerto asignado en CloudPanel (debe coincidir con gunicorn_config.py)
+    proxy_pass http://127.0.0.1:8091; 
+    
+    proxy_http_version 1.1;
+    
+    # Headers estándar
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Server $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Host $host;
+
+    # --- WEBSOCKETS ---
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    
+    # Timeouts largos para SSH
+    proxy_read_timeout 86400;
+    proxy_send_timeout 86400;
+  }
+```
+
+Guarda y ¡Listo! Tu backend debería estar operativo con WebSockets funcionando.

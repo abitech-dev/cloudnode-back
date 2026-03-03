@@ -117,8 +117,16 @@ DATABASES = {
     }
 }
 
-CORS_ALLOW_ALL_ORIGINS = True # For development, allow all origins
-# Or use CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+# CORS Configuration
+# En desarrollo (DEBUG=True) permitimos todo.
+# En producción, leemos la lista de dominios permitidos del .env
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+    # Alternativa si quieres permitir credenciales (cookies/auth headers)
+    # CORS_ALLOW_CREDENTIALS = True
 
 
 # Password validation
